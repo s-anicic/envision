@@ -1,65 +1,107 @@
-import Image from "next/image";
+"use client";
+
+import React, { useState, useEffect } from 'react';
+import { 
+  signInAnonymously, 
+  onAuthStateChanged, 
+  User, 
+  setPersistence, 
+  browserLocalPersistence 
+} from 'firebase/auth'; 
+import { collection, query, orderBy, onSnapshot, writeBatch, doc } from 'firebase/firestore';
+import { auth, db } from './lib/firebase';
+import { Sidebar } from './components/Sidebar';
+import { DashboardView, GoalsView, VisionView, Goal, VisionItem } from './components/Views';
+import { AddGoalModal, AddVisionModal } from './components/Modals';
 
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [view, setView] = useState('dashboard');
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [visionItems, setVisionItems] = useState<VisionItem[]>([]);
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [showVisionModal, setShowVisionModal] = useState(false);
+
+  useEffect(() => {
+
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+          if (currentUser) {
+           
+            console.log("Restored session for:", currentUser.uid);
+            setUser(currentUser);
+          } else {
+            
+            console.log("No user found. Creating new anonymous account...");
+            signInAnonymously(auth).catch((err) => console.error("Auth Error:", err));
+          }
+        });
+
+        return () => unsubscribe();
+      })
+      .catch((error) => {
+        console.error("Persistence failed:", error);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    
+    const qGoals = query(collection(db, 'users', user.uid, 'goals'), orderBy('order', 'asc'));
+    const unsubGoals = onSnapshot(qGoals, (snapshot) => {
+      setGoals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal)));
+    });
+
+    const qVision = query(collection(db, 'users', user.uid, 'visionBoard'), orderBy('createdAt', 'desc'));
+    const unsubVision = onSnapshot(qVision, (snapshot) => {
+      setVisionItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as VisionItem)));
+    });
+
+    return () => {
+      unsubGoals();
+      unsubVision();
+    };
+  }, [user]);
+
+  const handleReorder = async (newGoals: Goal[]) => {
+    setGoals(newGoals);
+    if (!user) return;
+    try {
+      const batch = writeBatch(db);
+      newGoals.forEach((goal, index) => {
+        const ref = doc(db, 'users', user.uid, 'goals', goal.id);
+        batch.update(ref, { order: index });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("Error saving order:", err);
+    }
+  };
+
+  if (!user) return <div className="flex h-screen items-center justify-center text-stone-400">Loading your workspace...</div>;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="flex h-screen bg-[#F5F5F4] text-stone-800 font-sans antialiased overflow-hidden">
+      <Sidebar currentView={view} setView={setView} userEmail={user.isAnonymous ? 'Guest User' : user.email} />
+
+      <main className="flex-1 overflow-auto">
+        <div className="max-w-6xl mx-auto p-8 pt-12">
+          {view === 'dashboard' && <DashboardView goals={goals} visionItems={visionItems} />}
+          {view === 'goals' && (
+            <GoalsView 
+              goals={goals} 
+              userId={user.uid} 
+              onAdd={() => setShowGoalModal(true)} 
+              onReorder={handleReorder} 
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          )}
+          {view === 'vision' && <VisionView items={visionItems} userId={user.uid} onAdd={() => setShowVisionModal(true)} />}
         </div>
       </main>
+
+      <AddGoalModal isOpen={showGoalModal} onClose={() => setShowGoalModal(false)} userId={user.uid} />
+      <AddVisionModal isOpen={showVisionModal} onClose={() => setShowVisionModal(false)} userId={user.uid} />
     </div>
   );
 }
